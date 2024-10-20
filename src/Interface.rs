@@ -22,7 +22,7 @@ impl CLI {
     } 
 
     pub fn create_blockchain(&mut self, address: &str){
-        let mut bc = BlockChain::new_blockchain(address);
+        let mut bc = BlockChain::new_blockchain(&address.to_string());
         println!("Done : Creating blockchain for address: {} \n", address);
         self.blockchain = Some(bc);
         // print!("cur blockchain: {:?}", self.blockchain);
@@ -119,7 +119,7 @@ impl CLI {
     pub fn send(&mut self, from: &str, to: &str, amount: i32) {  
 
         if let Some(ref mut block_chain) = self.blockchain {  
-            let tx = Transaction::new_utxo_transaction(from, to, amount, &block_chain);
+            let tx = Transaction::new_utxo_transaction(from.to_string(), to.to_string(), amount, &block_chain);
             block_chain.MineBlock(vec![tx]); // 调用 MineBlock 方法  
             println!("Success send!");  
         } else {  

@@ -14,7 +14,7 @@ pub struct BlockChain {
 
 impl BlockChain {
 
-    pub fn new_blockchain(address: &str) -> BlockChain {  
+    pub fn new_blockchain(address: &String) -> BlockChain {  
         let db = sled::open(DB_FILE).expect("Failed to open database");  
         let mut tip = vec![];  
 
@@ -23,7 +23,7 @@ impl BlockChain {
             tip = db.get("tip").expect("Failed to get tip").unwrap().to_vec();
         } else {  
             // 如果不存在块，创建创世块  
-            let cbtx = Transaction::new_coinbase_transcation(address, "Genesis Block".to_string());  
+            let cbtx = Transaction::new_coinbase_transcation(&address, &"Genesis Block".to_string());  
             let genesis = Self::NewGenesisBlock(cbtx);  
             // 将创世块插入到数据库  
             db.insert(genesis.hash.clone(), genesis.serialize()).expect("Failed to insert genesis block");  
@@ -64,12 +64,14 @@ impl BlockChain {
     }
 
     pub fn find_utxo(&self, address: &str) -> Vec<TXOutput> {  
-        let mut utxos = Vec::new();  
-        let unspent_transactions = self.find_unspent_transactions(address);  
+        let address = hex::decode(address).expect("can't decode string -> vec");
+        let mut utxos = Vec::new();
+
+        let unspent_transactions = self.find_unspent_transactions(&address);  
 
         for tx in unspent_transactions {  
             for out in &tx.outputs {  
-                if out.can_be_unlocked_with(address) {  
+                if out.is_locked_with_key(&address) {  
                     utxos.push(out.clone());  
                 }  
             }  
@@ -78,7 +80,7 @@ impl BlockChain {
         utxos  
     }  
 
-    pub fn find_unspent_transactions(&self, address: &str) -> Vec<Transaction> { 
+    pub fn find_unspent_transactions(&self, Hash_pubKey: &Vec<u8>) -> Vec<Transaction> { 
         // print!("Finding unspent transactions for address: {}\n", address); 
         let mut unspent_txs = Vec::new();
         // 用于跟踪已花费交易输出的映射  
@@ -108,7 +110,7 @@ impl BlockChain {
                         }  
                     }  
                     // 如果输出可以被解锁，则可以被花费
-                    if out.can_be_unlocked_with(address) {  
+                    if out.is_locked_with_key(&Hash_pubKey) {  
                         //添加到未花费交易列表  
                         unspent_txs.push(transaction.clone()); 
                     }  
@@ -118,7 +120,7 @@ impl BlockChain {
                     // 遍历交易的每个输入  
                     for transaction_input in &transaction.inputs {  
                         // 如果输入可以解锁输出  
-                        if transaction_input.can_unlock_output_with(address) {  
+                        if transaction_input.uses_key(Hash_pubKey) {  
                             let transaction_input_id = hex::encode(&transaction_input.transcation_id); // 编码输入的交易 ID  
                             // 将输入的输出索引添加到已花费交易输出的映射中  
                             spent_txos.entry(transaction_input_id).or_insert_with(Vec::new).push(transaction_input.vout);  
@@ -134,11 +136,11 @@ impl BlockChain {
         unspent_txs
     }     
 
-    pub fn find_spendable_outputs(&self, address: &str, amount: i32) -> (i32, HashMap<String, Vec<usize>>) {  
+    pub fn find_spendable_outputs(&self, hash_public_key: &Vec<u8>, amount: i32) -> (i32, HashMap<String, Vec<usize>>) {  
         // 存储可花费的输出  
         let mut unspent_outputs: HashMap<String, Vec<usize>> = HashMap::new();
-        // 查找未花费的交易 
-        let unspend_transactions = self.find_unspent_transactions(address);  
+        // 查找存在未花费的交易 
+        let unspend_transactions = self.find_unspent_transactions(hash_public_key);  
         // 累积的金额  
         let mut accumulated = 0;
 
@@ -149,7 +151,7 @@ impl BlockChain {
             // 遍历交易的每个输出  
             for (out_idx, out) in transcation.outputs.iter().enumerate() {  
                 // 如果输出可以被解锁且累积金额小于所需金额  
-                if out.can_be_unlocked_with(address) && accumulated < amount {  
+                if out.is_locked_with_key(hash_public_key) && accumulated < amount {  
                     accumulated += out.value;
                     // 添加到可花费输出映射中
                     // 将输出索引添加到未花费输出的映射中  

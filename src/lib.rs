@@ -7,6 +7,7 @@ pub mod Interface;
 pub mod transactions;
 pub mod wallet;
 pub mod functions;
+pub mod UTXOset;
 
 pub const TARGET_BITS: u32 = 12; 
 pub const MAX_NONCE: u32 = 1_000_000_000; 

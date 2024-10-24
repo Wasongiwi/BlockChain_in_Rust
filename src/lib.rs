@@ -10,8 +10,11 @@ pub mod functions;
 
 pub const TARGET_BITS: u32 = 12; 
 pub const MAX_NONCE: u32 = 1_000_000_000; 
-pub const SUBSIDY: i32 = 70;
+pub const GENESIS: i32 = 77;
+pub const SUBSIDY: i32 = 10;
 pub const DB_FILE: &str = "blockchain.db";
+const VERSION: u8 = 0; // 假设版本号为 0  
+const ADDRESS_CHECKSUM_LEN: usize = 4; // 假设地址校验和的长度为 4
 
 
 

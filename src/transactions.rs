@@ -1,5 +1,5 @@
 use crate::{block_chain::BlockChain, SUBSIDY};
-use crate::functions::publicKey_to_hash ;
+use crate::functions;
 use crate::wallet::Wallets;
 
 use ring::{rand as ring_rand, signature::{self, EcdsaKeyPair, UnparsedPublicKey, Signature, ECDSA_P256_SHA256_ASN1}};
@@ -43,7 +43,7 @@ impl TXInput {
     // }  
 
     pub fn uses_key(&self, pub_key_hash: &Vec<u8>) -> bool {  
-        let locking_hash = publicKey_to_hash(&self.PubKey);  
+        let locking_hash = functions::publicKey_to_hash(&self.PubKey);  
         locking_hash.cmp(&pub_key_hash) == Ordering::Equal 
 
         // pub_key_hash == locking_hash 
@@ -57,9 +57,7 @@ impl TXOutput {
 
     // 将地址锁定到输出  
     pub fn lock(&mut self, address: &String) {  
-        let addr_vec = hex::decode(&address).expect("can't decode to vec");
-        let pub_key_hash = addr_vec.from_base58().expect("can't  decode base58"); // 假设有一个 Base58 解码函数  
-        self.PubKeyHash = pub_key_hash[1..pub_key_hash.len() - 4].to_vec(); // 提取公钥哈希  
+        self.PubKeyHash = functions::address_to_pubkeyhash(&address)
     }  
 
     // 检查输出是否被指定的公钥哈希锁定  
@@ -70,9 +68,11 @@ impl TXOutput {
     pub fn newTXOutput(value: i32, address: &String) -> TXOutput {
         let mut txo = TXOutput { 
             value, 
-            PubKeyHash: vec![],
+            PubKeyHash: Vec::new(),
         };  
-        txo.lock(&address); // Convert address to bytes and lock it  
+        // println!("address {}", &address);
+        txo.lock(&address);
+        // println!("output hash{:?}", txo.PubKeyHash);
         txo 
     } 
 }  
@@ -85,21 +85,19 @@ impl Transaction {
         self.inputs.len() == 1 && self.inputs[0].transcation_id.is_empty() && self.inputs[0].vout == usize::MAX - 1
     }
 
-    pub fn set_Serialize(&self) -> Vec<u8> {  
+    pub fn set_hash(&self) -> Vec<u8> {  
         let encoded: Vec<u8> = bincode::serialize(self).expect("Error serializing transaction"); 
-        encoded  
+        let hash = Sha3_256::digest(&encoded);  
+        hash.to_vec()
     } 
 
-    pub fn set_hash(&self) -> Vec<u8> {  
-        let encoded = self.set_Serialize();  
-        let hash = Sha3_256::digest(&encoded);  
-        let id = hash.to_vec();  
-
+    pub fn set_id(&self) -> Vec<u8> {  
+        let id = self.set_hash();  
         id
     }
 
     pub fn new_coinbase_transcation(to: &String, data: &String) -> Transaction {  
-        let pubkey = hex::decode(data).expect("can't decode string -> vec");
+        let pubkey = data.as_bytes().to_vec();
 
         let txin = TXInput {  
             transcation_id: Vec::new(),  
@@ -108,7 +106,7 @@ impl Transaction {
             PubKey: pubkey,  
         };  
     
-        let txout = TXOutput::newTXOutput(SUBSIDY, &to);  
+        let txout = TXOutput::newTXOutput(SUBSIDY, to);  
     
         let mut tx = Transaction {  
             id: Vec::new(),  
@@ -116,36 +114,30 @@ impl Transaction {
             outputs: vec![txout],  
         };  
         
-        tx.id = tx.set_hash(); 
-    
+        tx.id = tx.set_id(); 
+        // println!("coinbaSE Gen tx{:?}", &tx.id);
         tx  
     }
 
-    pub fn new_utxo_transaction(from_addr: String, to: String, amount: i32, bc: &BlockChain) -> Transaction {  
-        println!("A new transcation from: {}, to: {}, amount: {} \n", from_addr, to, amount);  
+    pub fn new_utxo_transaction(from_addr: &String, to_addr: &String, amount: i32, bc: &BlockChain, cur_wallets: &Wallets) -> Transaction {  
+        println!("A new transcation from: {}, to: {}, amount: {} \n", from_addr, to_addr, amount);  
         let mut inputs = Vec::new();  
         let mut outputs = Vec::new();  
 
-        let wallets = Wallets::new();  
-        let wallet = wallets.get_wallet(&from_addr).expect("can't find wallet");  
-    
-        let pub_key_hash = publicKey_to_hash(&wallet.public_key);  
-    
-        // 假设有一个区块链实例  
+        let wallet = cur_wallets.get_wallet(&from_addr).expect("can't find wallet from the address");  
+        let pub_key_hash = functions::publicKey_to_hash(&wallet.public_key);  
         let (acc, valid_outputs) = bc.find_spendable_outputs(&pub_key_hash, amount);  
     
-        println!("Accumulated: {}, Valid Outputs: {:?}", acc, valid_outputs);  
+        // println!("Accumulated: {} \n, Valid Outputs: {:?} \n ", acc, valid_outputs);  
         if acc < amount {  
             panic!("ERROR: Not enough funds");  
         }  
     
         // 构建输入列表  
         for (txid, outs) in valid_outputs {  
-            let tx_id = hex::decode(&txid).expect("Invalid tx_ID");  
-    
             for &out in &outs {  
                 let input = TXInput {  
-                    transcation_id: tx_id.clone(),  
+                    transcation_id: txid.clone(),  
                     vout: out, 
                     Signature: Vec::new(),
                     PubKey: wallet.public_key.clone(),
@@ -155,10 +147,10 @@ impl Transaction {
         }  
     
         // 构建输出列表  
-        outputs.push(TXOutput::newTXOutput(amount, &to));  
+        outputs.push(TXOutput::newTXOutput(amount, &to_addr));  
         
         if acc > amount {  
-            outputs.push(TXOutput::newTXOutput(acc - amount, &to)); 
+            outputs.push(TXOutput::newTXOutput(acc - amount, &from_addr)); 
         }  
     
         let mut tx = Transaction {  
@@ -167,8 +159,10 @@ impl Transaction {
             outputs: outputs,  
         }; 
     
-        tx.set_Serialize();  
-    
+        tx.id = tx.set_id();  
+        // println!(" ====================================sign pubkey {:?}", wallet.public_key);
+        // println!(" ====================================from addr {:?}", from_addr);
+        bc.sign_transaction(&mut tx, &wallet.key_pair);
         tx  
     }  
     
@@ -198,99 +192,73 @@ impl Transaction {
         }  
     }  
 
-    pub fn sign(&mut self, key_pair: &EcdsaKeyPair, prev_txs: &HashMap<String, Transaction>) {  
+    pub fn sign(&mut self, key_pair: &EcdsaKeyPair, prev_txs: &HashMap<Vec<u8>, Transaction>) {  
         if self.is_coinbase() {  
             return;  
         }  
         let rng = ring_rand::SystemRandom::new(); 
         let mut tx_copy = self.trimmed_copy();  
-        // 遍历每个输入  
         for (in_id, vin) in self.inputs.iter_mut().enumerate() {  
             // 获取前一个交易  
-            if let Some(prev_tx) = prev_txs.get(&hex::encode(&vin.transcation_id)) {  
+            if let Some(prev_tx) = prev_txs.get(&vin.transcation_id) {  
+
                 tx_copy.inputs[in_id].Signature = Vec::new();  
                 tx_copy.inputs[in_id].PubKey = prev_tx.outputs[vin.vout].PubKeyHash.clone();  
+                // tx_copy.id = tx_copy.set_id();  
 
-                // 更新交易ID的哈希  
-                tx_copy.set_hash(); // 更新哈希  
+                // println!("cur tx_copy {:?}\n", tx_copy);
 
-                // 进行签名  
                 let signature = key_pair.sign(&rng, &tx_copy.set_hash()).unwrap();  
 
-                // 将签名存储到输入中  
                 vin.Signature = signature.as_ref().to_vec();  
-                vin.PubKey = Vec::new(); // 清理公钥  
+                // vin.PubKey = Vec::new (); // 清理公钥  
             }  
         }  
+
+        // println!(" \n self.sign {:?} \n", self.inputs[0].Signature);
+        // println!(" self.pubkey {:?} \n", self.inputs[0].PubKey);
     } 
 
-    pub fn verify(&self, prev_txs: &HashMap<String, Transaction>) -> bool {  
+    pub fn verify(&self, prev_txs: &HashMap<Vec<u8>, Transaction>) -> bool {  
         if self.is_coinbase() {  
             return true;  
         }  
     
         for vin in &self.inputs {  
-            let prev_tx_key = hex::encode(&vin.transcation_id);  
-            if !prev_txs.contains_key(&prev_tx_key) {  
+            if !prev_txs.contains_key(&vin.transcation_id) {  
                 panic!("ERROR: Previous transaction is not correct");  
             }  
         }  
-    
-        let mut tx_copy = self.trimmed_copy();  
+        // println!("prev_txs {:?} \n", prev_txs);
+        let mut tx_copy = self.trimmed_copy();
+        // println!("tx_copy {:?} \n", tx_copy);  
+        // println!(" ver cur tx {:?} \n", self);
     
         for (in_id, vin) in self.inputs.iter().enumerate() {  
-            let prev_tx_key = hex::encode(&vin.transcation_id);  
-            let prev_tx = match prev_txs.get(&prev_tx_key) {  
+            // let prev_tx_key = hex::encode(&vin.transcation_id);  
+            let prev_tx = match prev_txs.get(&vin.transcation_id) {  
                 Some(tx) => tx,  
                 None => {  
                     return false; // 如果找不到前一交易，返回 false  
                 },  
             };  // 安全地获取前一交易  
     
-            // 清除签名  
             tx_copy.inputs[in_id].Signature.clear();  
-            // 确保获取前一交易输出的公钥哈希  
             tx_copy.inputs[in_id].PubKey = prev_tx.outputs[vin.vout].PubKeyHash.clone();  
             // tx_copy.id = tx_copy.set_hash(); // 不需要在这里更新哈希因为公钥会被清空  
             // 清除公钥  
             // tx_copy.inputs[in_id].PubKey.clear(); // 不清除公钥，保持其有效性  
-    
-            // 提取签名并分割为 R 和 S  
-            let signature = &vin.Signature;  
-            let sig_len = signature.len();  
-            let r = &signature[..sig_len / 2];   
-            let s = &signature[sig_len / 2..];  
-    
-            // 确保 R 和 S 的长度符合 ECDSA 签名的长度要求  
-            if r.len() != 32 || s.len() != 32 {  
-                return false; // 如果 R/S 的长度不合法，返回 false  
-            }  
+            // println!("ver copy {:?}", tx_copy);
     
             // 从公钥字节中提取公钥  
             let pubkey_bytes = &vin.PubKey;  
-    
-            // 创建公钥并进行签名验证  
-            let raw_pubkey = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, pubkey_bytes);  
-            
-            // DER编码签名  
-            let mut der_signature = Vec::new();  
-            der_signature.push(0x30); // SEQUENCE  
-            let r_len = r.len();  
-            let s_len = s.len();  
-            der_signature.push((r_len + s_len + 4) as u8); // Length of R + S + two tags  
-            der_signature.push(0x02); // INTEGER for R  
-            der_signature.push(r_len as u8);  
-            der_signature.extend_from_slice(r);  
-            der_signature.push(0x02); // INTEGER for S  
-            der_signature.push(s_len as u8);  
-            der_signature.extend_from_slice(s);  
-    
-            // 使用 DER 编码签名进行验证  
-            if raw_pubkey.verify(&tx_copy.id, &der_signature).is_err() {  
-                return false; // 如果验证失败，返回 false  
-            }  
+            // println!(" ver pubkey {:?}", pubkey_bytes);
+            let sig = &vin.Signature;  
+
+            let peer_public_key = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, pubkey_bytes);
+            return peer_public_key.verify(tx_copy.set_hash().as_slice(), sig.as_ref()).is_ok();
         }  
-        true // 如果所有签名都有效，返回 true  
+        true 
     }
 }  
 

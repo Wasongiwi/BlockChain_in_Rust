@@ -28,15 +28,31 @@ fn print_database_contents(file_db: &str) {
 fn main() {  
     
     let mut cli = CLI::new();  
+    cli.create_wallets();  
+    let wallets = cli.wallets.as_mut().expect("Wallets not found"); // Get a mutable reference  
+    println!("address1: \n");
+    let address1 = wallets.new_wallet();  
+    println!("address2: \n");
+    let address2 = wallets.new_wallet();  
+    println!("address3: \n");
+    let address3 = wallets.new_wallet();  
 
-    // 第一步：创建区块链  
-    cli.create_blockchain("lihuacheng");  
+    cli.create_blockchain(&address1);  
     
-    // 第二步：获取余额  
-    cli.get_balance("lihuacheng"); 
-    cli.send("lihuacheng", "lihua", 66);
-    cli.get_balance("lihuacheng"); 
-    cli.get_balance("lihua"); 
+    cli.get_balance(&address1); 
+    //address1 70 
+
+    cli.send(&address1, &address2, 66); 
+
+    cli.get_balance(&address1);  
+    // address1 4
+    cli.get_balance(&address2);  
+    // address2 66
+
+    cli.send(&address2, &address3, 50);
+    // address2 16
+    cli.get_balance(&address3);
+    //address3 50
     cli.print_chain();
 
     // cli.print_chain(DB_FILE);

@@ -54,10 +54,8 @@ impl Block {
             nonce: 0,
         };
         let pow = ProofOfWork::new(&block);
-        let (nonce, hash) = pow.run();
 
-        block.hash = hash;
-        block.nonce = nonce;
+        (block.nonce, block.hash) = pow.run();
         
         return block;
     }

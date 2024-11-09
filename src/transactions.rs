@@ -1,9 +1,11 @@
 use crate::{block_chain::BlockChain, SUBSIDY};
 use crate::functions;
 use crate::wallet::Wallets;
+use crate::UTXOset::UTXOSet;
 
 use ring::{rand as ring_rand, signature::{self, EcdsaKeyPair, UnparsedPublicKey, Signature, ECDSA_P256_SHA256_ASN1}};
 
+use serde::ser::SerializeTuple;
 use serde::{Deserialize, Serialize};  
 use sha3::{Sha3_256, Digest};
 use std::cmp::Ordering;  
@@ -34,6 +36,11 @@ pub struct TXOutput {
     pub value: i32, 
     // pub ScriptPubKey: String, 
     pub PubKeyHash:Vec<u8>,
+}  
+
+#[derive(Serialize, Deserialize, Debug)]  
+pub struct TXOutputs {  
+    pub outputs: Vec<TXOutput>,  
 }  
 
 impl TXInput {  
@@ -77,7 +84,6 @@ impl TXOutput {
     } 
 }  
 
-
 impl Transaction {  
 
     // IsCoinbase 判断是否是 coinbase 交易  
@@ -90,6 +96,11 @@ impl Transaction {
         let hash = Sha3_256::digest(&encoded);  
         hash.to_vec()
     } 
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let encoeded = bincode::serialize(self).expect("Error serializing transaction"); 
+        encoeded
+    }
 
     pub fn set_id(&self) -> Vec<u8> {  
         let id = self.set_hash();  
@@ -119,14 +130,20 @@ impl Transaction {
         tx  
     }
 
-    pub fn new_utxo_transaction(from_addr: &String, to_addr: &String, amount: i32, bc: &BlockChain, cur_wallets: &Wallets) -> Transaction {  
+    pub fn new_utxo_transaction(
+            from_addr: &String, to_addr: &String, 
+            amount: i32, 
+            bc: &BlockChain, 
+            cur_wallets: &Wallets, 
+            UTXOSet: &UTXOSet
+        ) -> Transaction {  
         println!("A new transcation from: {}, to: {}, amount: {} \n", from_addr, to_addr, amount);  
         let mut inputs = Vec::new();  
         let mut outputs = Vec::new();  
 
         let wallet = cur_wallets.get_wallet(&from_addr).expect("can't find wallet from the address");  
         let pub_key_hash = functions::publicKey_to_hash(&wallet.public_key);  
-        let (acc, valid_outputs) = bc.find_spendable_outputs(&pub_key_hash, amount);  
+        let (acc, valid_outputs) = UTXOSet.find_spendable_outputs(&pub_key_hash, amount);  
     
         // println!("Accumulated: {} \n, Valid Outputs: {:?} \n ", acc, valid_outputs);  
         if acc < amount {  
@@ -166,8 +183,6 @@ impl Transaction {
         tx  
     }  
     
-
-
     fn trimmed_copy(&self) -> Transaction {  
         let inputs: Vec<TXInput> = self.inputs.iter()  
             .map(|vin| TXInput {  
@@ -263,4 +278,21 @@ impl Transaction {
 }  
 
 
+
+impl TXOutputs {  
+    pub fn new() -> Self {
+        TXOutputs {
+            outputs: Vec::new(), 
+        }
+    }
+    // Serialize serializes TXOutputs  
+    pub fn serialize(&self) -> Vec<u8> {  
+        bincode::serialize(self).expect("Serialization failed")  
+    }  
+}  
+
+// deserialize_outputs deserializes TXOutputs  
+fn deserialize_outputs(data: &[u8]) -> TXOutputs {  
+    bincode::deserialize(data).expect("Deserialization failed")  
+}  
 

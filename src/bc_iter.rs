@@ -14,21 +14,8 @@ impl<'a> BlockchainIterator<'a> {
         }  
     }  
     pub fn next(&mut self) -> Option<Block> {  
-        // println!("Current hash: {:?}", self.current_hash);
-        // for item in self.db.iter() {  
-        //     match item {  
-        //         Ok((key, value)) => {  
-        //             // 打印键和值  
-        //             println!("Key: {:?} \n, Value: {:?} \n", key, value);  
-        //         },  
-        //         Err(e) => {  
-        //             eprintln!("Error retrieving item from database: {:?}", e);  
-        //         },  
-        //     }  
-        // }
-        // let result = self.db.get(&self.current_hash).expect("Failed to get block");
-        // println!("Result: {:?}", result);
-        if let Some(block_bytes) = self.db.get(&self.current_hash).expect("Failed to get block") {  
+        let block_tree = self.db.open_tree("blocks").unwrap();  
+        if let Some(block_bytes) = block_tree.get(&self.current_hash).expect("Failed to get block") {  
             // 反序列化区块  
             let block: Block = bincode::deserialize(&block_bytes).expect("Failed to deserialize block");  
             // println!("Value: {:?}", block);  

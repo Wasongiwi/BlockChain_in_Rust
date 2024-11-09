@@ -2,6 +2,7 @@ use crate::block_chain::BlockChain;
 use crate::block::Block;
 use crate::transactions::Transaction;
 use crate::wallet::{self, Wallet, Wallets};
+use crate::UTXOset::UTXOSet;
 use crate::DB_FILE;
 use sled::Db; // 引入 sled 数据库 
 use crate::proof_of_work::ProofOfWork;
@@ -12,7 +13,7 @@ use std::process;
 use crate::functions::{self, validate_address};
 
 pub struct CLI {  
-    pub blockchain: Option<BlockChain>, // 使用 Option<BlockChain>  
+    pub blockchain: Option<BlockChain>, 
     pub wallets: Option<Wallets>,  
 }  
 
@@ -31,8 +32,14 @@ impl CLI {
             process::exit(1);
         }
         let bc = BlockChain::new_blockchain(address);
-        println!("Done : Creating blockchain for address: {} \n", address);
         self.blockchain = Some(bc);
+        let utxoset = UTXOSet {
+            blockchain: self.blockchain.as_ref().unwrap().clone(),
+        };
+        // println!("1 \n");
+        utxoset.reindex();
+        println!("Done : Creating blockchain for address: {} \n", address);
+        // self.blockchain = bc;
         // print!("cur blockchain: {:?}", self.blockchain);
     }
 
@@ -90,7 +97,10 @@ impl CLI {
         println!("Getting balance for address: {} \n", address);
         // print!("cur blockchain: {:?}", self.blockchain);
         let bc = self.blockchain.as_ref().expect("Blockchain not found");  
-        let utxos = bc.find_utxo(address); // 找到未花费的交易输出  
+        let utxoset = UTXOSet {
+            blockchain: bc.clone(),
+        };
+        let utxos = utxoset.find_utxos(address);  
 
         let balance: i32 = utxos.iter().map(|out| out.value).sum(); // 计算余额  
 
@@ -133,10 +143,19 @@ impl CLI {
         let wallets = self.wallets.as_ref().expect("wallets not found");
         if let Some(ref mut block_chain) = self.blockchain {  
             // let tx = Transaction::new_utxo_transaction(&from, &to, amount, &block_chain, &wallets, &UTXOSet);
-            let tx = Transaction::new_utxo_transaction(&from, &to, amount, &block_chain, &wallets);
+            let utxoset = UTXOSet{
+                blockchain: block_chain.clone(),
+            };
+            let tx = Transaction::new_utxo_transaction(
+                &from, &to, amount, 
+                &block_chain, 
+                &wallets,
+                &utxoset
+            );
             let cbTX = Transaction::new_coinbase_transcation(from, &String::from("Reward"));
-            let txs: Vec<Transaction> = vec![cbTX, tx]; 
-            block_chain.MineBlock(txs); 
+            let txs: Vec<Transaction> = vec![tx, cbTX]; 
+            let newblock = block_chain.MineBlock(txs); 
+            utxoset.update(&newblock);
             println!("Success send!");  
         } else {  
             eprintln!("Error: BlockChain is None");  

@@ -4,40 +4,30 @@ use std::{result, time::{SystemTime, UNIX_EPOCH}};
 use serde::{Serialize, Deserialize}; 
 use crate::proof_of_work::ProofOfWork;
 use crate::transactions::Transaction;
+use crate::merkle_tree::MerkleTree;
 
 
 #[derive(Serialize, Deserialize, Debug)]  
 pub struct Block {  
-    // Timestamp of the block (8 bytes)  
     pub timestamp: u64,  
-    // Hash of the previous block (32 bytes)  
     pub previous_block_hash: Vec<u8>,  
-    // Hash of the block (32 bytes)  
     pub hash: Vec<u8>,  
-    // Data (32 bytes)  
     pub transactions: Vec<Transaction>,
 
     pub nonce: u32,
 }  
 
 impl Block {
-    // 计算区块里所有交易的哈希  
     fn hash_transactions(&self) -> Vec<u8> {  
-        let mut tx_hashes: Vec<Vec<u8>> = Vec::new();  
+        let mut tx_serialized: Vec<Vec<u8>> = Vec::new();  
 
         for tx in &self.transactions {  
-            tx_hashes.push(tx.id.clone());  
+            tx_serialized.push(tx.serialize());  
         }  
 
-        // 将所有的交易哈希连接起来  
-        let concatenated_hashes: Vec<u8> = tx_hashes.concat();  
+        let mtree = MerkleTree::new(tx_serialized);
 
-        // 计算连接的哈希  
-        let mut hasher = Sha3_256::new();  
-        hasher.update(concatenated_hashes);  
-        let result = hasher.finalize();  
-
-        result.to_vec()  
+        mtree.root_node.unwrap().data
     }  
 
     pub fn new(transactions: Vec<Transaction>, prev_block_hash: Vec<u8>) -> Self {

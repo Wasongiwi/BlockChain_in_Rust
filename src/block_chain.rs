@@ -3,12 +3,12 @@ use crate::{block::Block, DB_FILE};
 use crate::bc_iter::BlockchainIterator;
 use std::clone;
 use std::collections::HashMap;
-use crate::transactions::{Transaction, TXOutput};
+use crate::transactions::{Transaction, TXOutput, TXOutputs};
 use ring::signature::EcdsaKeyPair;
 use sled::{transaction, Db, IVec};  
 use serde::{Serialize, Deserialize}; 
 
-#[derive(Debug)] 
+#[derive(Debug, Clone)] 
 pub struct BlockChain {
     pub tip: Vec<u8>, 
     pub db: Db,
@@ -21,18 +21,19 @@ impl BlockChain {
         let db = sled::open(DB_FILE).expect("Failed to open database");  
         let mut tip = vec![];  
 
-        if let Some(_) = db.get("blocks").unwrap() {  
-            // 如果 bucket 存在，则从中获取 tip  
-            tip = db.get("tip").expect("Failed to get tip").unwrap().to_vec();
-        } else {  
-            // 如果不存在块，创建创世块  
+        let blocks_bucket = db.open_tree("blocks").expect("Failed to open blocks tree");  
+
+        // if blocks_bucket.is_empty() {  
             let cbtx = Transaction::new_coinbase_transcation(address, &"Genesis Block".to_string());  
             let genesis = Self::NewGenesisBlock(cbtx);  
-            // 将创世块插入到数据库  
-            db.insert(genesis.hash.clone(), genesis.serialize()).expect("Failed to insert genesis block");  
+            
+            blocks_bucket.insert(genesis.hash.clone(), genesis.serialize()).expect("Failed to insert genesis block");  
             db.insert("tip", genesis.hash.clone()).expect("Failed to insert tip");  
             tip = genesis.hash;  
-        }  
+        // } else {  
+        //     tip = db.get("tip").expect("Failed to get tip").unwrap().to_vec();
+        // } 
+ 
         BlockChain { tip, db }  
     }  
 
@@ -41,9 +42,7 @@ impl BlockChain {
         Block::new(transactions, vec![]) // Pass an empty hash for the genesis block  
     }
 
-
-
-    pub fn MineBlock(&mut self, transactions: Vec<Transaction>) {  
+    pub fn MineBlock(&mut self, transactions: Vec<Transaction>) -> Block {  
         for tx in &transactions {  
             if !self.verify_transaction(tx) {  
                 panic!("ERROR: Invalid transaction");  
@@ -67,10 +66,12 @@ impl BlockChain {
 
         // 更新数据库  
         let new_block = Block::new(transactions, last_hash.clone());
-       
-        self.db.insert(&new_block.hash.clone(), new_block.serialize()).expect("Failed to insert new block");   
+        let blocks_tree = self.db.open_tree("blocks").expect("Failed to open blocks tree");  
+        blocks_tree.insert(new_block.hash.clone(), new_block.serialize()).expect("Failed to insert new block");   
         self.db.insert("tip", new_block.hash.clone()).expect("Failed to update tip");  
-        self.tip = new_block.hash;
+        self.tip = new_block.hash.clone();
+
+        return new_block;  
 
     } 
 
@@ -78,88 +79,133 @@ impl BlockChain {
         BlockchainIterator::new(&self.db, self.tip.clone())  
     }
 
-    pub fn find_utxo(&self, address: &str) -> Vec<TXOutput> {  
-        // print!("Finding unspent transactions for address: {}\n", &address); 
-        let queryPubHash_from_address = functions::address_to_pubkeyhash(address);
-        let mut utxos = Vec::new();
-
-        let unspent_transactions = self.find_unspent_transactions(&queryPubHash_from_address);  
-
-        for tx in unspent_transactions {  
-            for out in &tx.outputs {  
-                if out.is_locked_with_key(&queryPubHash_from_address) {  
-                    utxos.push(out.clone());  
-                }  
-            }  
-        }  
-        utxos  
-    }  
-
-    pub fn find_unspent_transactions(&self, Hash_pubKey: &Vec<u8>) -> Vec<Transaction> { 
-        let mut unspent_txs = Vec::new();
-        // 用于跟踪已花费交易输出的映射  
-        let mut spent_txos: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
-        let mut bc_iter = self.iterator();
-        // print!("Current tip: {:?}\n", self.tip);
-        // print!("Current hash: {:?}\n", bc_iter.current_hash.clone());
-        // 遍历区块链中的每个区块  
-        while let Some(block) = bc_iter.next() {  
-            for transaction in &block.transactions {  
-                for (out_idx, out) in transaction.outputs.iter().enumerate() {  
-                    // 如果这个output已经指向了一个input，那就证明这个output已经被花费
-                    if let Some(spent_outputs) = spent_txos.get(&transaction.id) {  
+    pub fn find_utxo(&self) -> HashMap<Vec<u8>, TXOutputs> {  
+        // println!("1 find_utxo \n");
+        let mut utxo: HashMap<Vec<u8>, TXOutputs> = HashMap::new();  
+        let mut spent_txos: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();  
+        let mut bci = self.iterator();  
+        // println!("print chain {:?} \n", &self);
+        // println!("1 bci.next() {:?} \n", bci.next());
+        
+        while let Some(block) = bci.next() {
+            // println!("1 bci.next() \n");
+            for tx in &block.transactions {  
+                // println!("2 \n");
+                for (out_idx, out) in tx.outputs.iter().enumerate() {  
+                    // println!("3 \n");
+                    if let Some(spent_outputs) = spent_txos.get(&tx.id) {  
                         if spent_outputs.contains(&out_idx) {  
                             continue;  
                         }  
                     }  
-                    if out.is_locked_with_key(&Hash_pubKey) {  
-                        //添加到未花费交易列表  
-                        unspent_txs.push(transaction.clone()); 
-                    }  
+                    // println!("tx.id {:?}", &tx.id);
+                    utxo.entry(tx.id.clone())  
+                        .or_insert_with(TXOutputs::new)  
+                        .outputs.push(out.clone());  
                 }  
-                // 如果该交易不是创世交易  
-                if !transaction.is_coinbase() {  
-                    for transaction_input in &transaction.inputs {  
-                        if transaction_input.uses_key(Hash_pubKey) {  
-                            // println!("j==================================================");
-                            spent_txos.entry(transaction_input.transcation_id.clone()).or_insert_with(Vec::new).push(transaction_input.vout);  
-                        }  
+
+                if !tx.is_coinbase() {  
+                    for input in &tx.inputs {  
+                        // let in_tx_id = hex::encode(&input.transcation_id);  
+                        spent_txos.entry(input.transcation_id.clone())  
+                            .or_insert_with(Vec::new)  
+                            .push(input.vout as usize);  
                     }  
                 }  
             }  
+
             if block.previous_block_hash.is_empty() {  
-                break; 
+                break;  
             }  
-        }  
-        // println!("uspent_txs {:?} \n", &unspent_txs);
-        unspent_txs
-    }     
-
-    pub fn find_spendable_outputs(&self, hash_public_key: &Vec<u8>, amount: i32) -> (i32, HashMap<Vec<u8>, Vec<usize>>) {  
-        // 存储可花费的输出  
-        let mut unspent_outputs: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
-        let unspend_transactions = self.find_unspent_transactions(hash_public_key);  
-        let mut accumulated = 0;
-
-        // 遍历这个地址未花费的交易  
-        'work: for transcation in unspend_transactions {   
-            // println!("==========================cur tx{:?}", &transcation);
-            // 遍历交易的每个输出  
-            for (out_idx, out) in transcation.outputs.iter().enumerate() {  
-                // println!("==========================cur out=========={:?}", &out);
-                if out.is_locked_with_key(hash_public_key) && accumulated < amount {  
-                    // println!("-----------------------------{}", &out.value);
-                    accumulated += out.value;
-                    unspent_outputs.entry(transcation.id.clone()).or_insert_with(Vec::new).push(out_idx); 
-                    if accumulated >= amount {  
-                        break 'work; 
-                    }  
-                }  
-            }  
-        }  
-        // 返回累积金额和可花费输出的映射 
-        (accumulated, unspent_outputs) 
+        }
+        // println!("utxo {:?}", &utxo);
+        utxo  
     }  
+
+
+
+    // pub fn find_utxo(&self, address: &str) -> Vec<TXOutput> {  
+    //     // print!("Finding unspent transactions for address: {}\n", &address); 
+    //     let queryPubHash_from_address = functions::address_to_pubkeyhash(address);
+    //     let mut utxos = Vec::new();
+
+    //     let unspent_transactions = self.find_unspent_transactions(&queryPubHash_from_address);  
+
+    //     for tx in unspent_transactions {  
+    //         for out in &tx.outputs {  
+    //             if out.is_locked_with_key(&queryPubHash_from_address) {  
+    //                 utxos.push(out.clone());  
+    //             }  
+    //         }  
+    //     }  
+    //     utxos  
+    // }  
+
+    // pub fn find_unspent_transactions(&self, Hash_pubKey: &Vec<u8>) -> Vec<Transaction> { 
+    //     let mut unspent_txs = Vec::new();
+    //     // 用于跟踪已花费交易输出的映射  
+    //     let mut spent_txos: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
+    //     let mut bc_iter = self.iterator();
+    //     // print!("Current tip: {:?}\n", self.tip);
+    //     // print!("Current hash: {:?}\n", bc_iter.current_hash.clone());
+    //     // 遍历区块链中的每个区块  
+    //     while let Some(block) = bc_iter.next() {  
+    //         for transaction in &block.transactions {  
+    //             for (out_idx, out) in transaction.outputs.iter().enumerate() {  
+    //                 // 如果这个output已经指向了一个input，那就证明这个output已经被花费
+    //                 if let Some(spent_outputs) = spent_txos.get(&transaction.id) {  
+    //                     if spent_outputs.contains(&out_idx) {  
+    //                         continue;  
+    //                     }  
+    //                 }  
+    //                 if out.is_locked_with_key(&Hash_pubKey) {  
+    //                     //添加到未花费交易列表  
+    //                     unspent_txs.push(transaction.clone()); 
+    //                 }  
+    //             }  
+    //             // 如果该交易不是创世交易  
+    //             if !transaction.is_coinbase() {  
+    //                 for transaction_input in &transaction.inputs {  
+    //                     if transaction_input.uses_key(Hash_pubKey) {  
+    //                         // println!("j==================================================");
+    //                         spent_txos.entry(transaction_input.transcation_id.clone()).or_insert_with(Vec::new).push(transaction_input.vout);  
+    //                     }  
+    //                 }  
+    //             }  
+    //         }  
+    //         if block.previous_block_hash.is_empty() {  
+    //             break; 
+    //         }  
+    //     }  
+    //     // println!("uspent_txs {:?} \n", &unspent_txs);
+    //     unspent_txs
+    // }     
+
+    // pub fn find_spendable_outputs(&self, hash_public_key: &Vec<u8>, amount: i32) -> (i32, HashMap<Vec<u8>, Vec<usize>>) {  
+    //     // 存储可花费的输出  
+    //     let mut unspent_outputs: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
+    //     let unspend_transactions = self.find_unspent_transactions(hash_public_key);  
+    //     let mut accumulated = 0;
+
+    //     // 遍历这个地址未花费的交易  
+    //     'work: for transcation in unspend_transactions {   
+    //         // println!("==========================cur tx{:?}", &transcation);
+    //         // 遍历交易的每个输出  
+    //         for (out_idx, out) in transcation.outputs.iter().enumerate() {  
+    //             // println!("==========================cur out=========={:?}", &out);
+    //             if out.is_locked_with_key(hash_public_key) && accumulated < amount {  
+    //                 // println!("-----------------------------{}", &out.value);
+    //                 accumulated += out.value;
+    //                 unspent_outputs.entry(transcation.id.clone()).or_insert_with(Vec::new).push(out_idx); 
+    //                 if accumulated >= amount {  
+    //                     break 'work; 
+    //                 }  
+    //             }  
+    //         }  
+    //     }  
+    //     // 返回累积金额和可花费输出的映射 
+    //     (accumulated, unspent_outputs) 
+    // }  
 
     pub fn find_transaction(&self, id: &Vec<u8>) -> Transaction {  
         let mut iterator = self.iterator();  
@@ -197,6 +243,9 @@ impl BlockChain {
     }  
 
     pub fn verify_transaction(&self, tx: &Transaction) -> bool {
+        if tx.is_coinbase() {
+            return true
+        }
         // println!("curr tx{:?}\n", tx);  
         let mut prev_txs = HashMap::new();  
 
